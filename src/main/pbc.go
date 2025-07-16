@@ -3,7 +3,7 @@ package main
 //
 // pbservice client application
 //
-// export GOPATH=~/6.824
+// export GOPATH=~/MIT6.824-2022-spring
 // go build viewd.go
 // go build pbd.go
 // go build pbc.go
