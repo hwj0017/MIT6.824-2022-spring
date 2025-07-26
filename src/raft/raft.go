@@ -26,7 +26,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
 	//	"MIT6.824-2022-spring/labgob"
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -103,6 +102,7 @@ type Raft struct {
 	// leader状态
 	nextIndex  []int // 对于每一个server，需要发送给他下一个日志条目的索引
 	matchIndex []int // 对于每一个server，已经复制给该server的最后日志条目下标
+	// matchIndex treemap.Map
 
 	// 快照状态
 
@@ -229,10 +229,9 @@ type AppendEntriesArgs struct {
 	Entries      []LogEntry
 }
 type AppendEntriesReply struct {
-	Term          int
-	Success       bool
-	LastTerm      int
-	LastTermIndex int // 用于返回与Leader.Term的匹配项,方便同步日志
+	Term       int
+	Success    bool
+	MatchIndex int // 用于返回与Leader.Term的匹配项,方便同步日志
 }
 
 // example RequestVote RPC handler.
@@ -388,8 +387,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	needPersisit := false
 	reply.Term = max(args.Term, rf.currentTerm)
 	reply.Success = true
-	reply.LastTerm = 0
-	reply.LastTermIndex = 0
+	reply.MatchIndex = 0
 	// fmt.Println("收到心跳")
 	// 收到rpc的term比自己的小 (§5.1)
 	if args.Term < rf.currentTerm { // 并通知leader变为follower
@@ -408,10 +406,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// log 缺失
 	if len(rf.log)-1 < args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Success = false
+		reply.MatchIndex = rf.commitIndex
 
 	} else {
 		// log 匹配
-		reply.Success = true
 		rf.log = rf.log[:args.PrevLogIndex+1]
 		rf.log = append(rf.log, args.Entries...)
 		rf.commitIndex = max(rf.commitIndex, args.LeaderCommit)
@@ -419,9 +417,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			go rf.applyLogs()
 		}
 		needPersisit = true
+		reply.Success = true
+		reply.MatchIndex = len(rf.log) - 1
 	}
-	reply.LastTerm = rf.log[len(rf.log)-1].Term
-	reply.LastTermIndex = len(rf.log) - 1
 	if needPersisit {
 		rf.persist()
 	}
@@ -464,13 +462,13 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) bool {
 		rf.persist()
 		return false
 	}
+	rf.nextIndex[server] = reply.MatchIndex + 1 // CommitIndex为对端确定两边相同的index 加上1就是下一个需要发送的日志
+	rf.matchIndex[server] = reply.MatchIndex
 	if !reply.Success {
-		lastTermIndex := rf.nextIndex[server] - 1
 		// TODO
-		for lastTermIndex > 0 && rf.log[lastTermIndex].Term != reply.LastTerm {
-			lastTermIndex--
-		}
-		rf.nextIndex[server] = min(lastTermIndex, reply.LastTermIndex) + 1
+		// for lastTermIndex > 0 && rf.log[lastTermIndex].Term != reply.LastTerm {
+		// 	lastTermIndex--
+		// }
 		args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.nextIndex[server] - 1,
 			PrevLogTerm: rf.log[rf.nextIndex[server]-1].Term, Entries: make([]LogEntry, len(rf.log[rf.nextIndex[server]:])), LeaderCommit: rf.commitIndex}
 		copy(args.Entries, rf.log[rf.nextIndex[server]:])
@@ -478,17 +476,15 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) bool {
 		return true
 	}
 	// success
-	rf.nextIndex[server] = reply.LastTermIndex + 1 // CommitIndex为对端确定两边相同的index 加上1就是下一个需要发送的日志
-	rf.matchIndex[server] = reply.LastTermIndex
 	commitCount := 0
 	rf.matchIndex[rf.me] = len(rf.log) - 1
 	for i := 0; i < len(rf.peers); i++ {
-		if rf.matchIndex[i] >= reply.LastTermIndex {
+		if rf.matchIndex[i] >= reply.MatchIndex {
 			commitCount++
 		}
 	}
-	if commitCount > len(rf.peers)/2 && rf.commitIndex < reply.LastTermIndex && rf.log[reply.LastTermIndex].Term == rf.currentTerm {
-		rf.commitIndex = reply.LastTermIndex
+	if commitCount > len(rf.peers)/2 && rf.commitIndex < reply.MatchIndex && rf.log[reply.MatchIndex].Term == rf.currentTerm {
+		rf.commitIndex = reply.MatchIndex
 		// fmt.Println("commitIndex:", rf.commitIndex)
 		go rf.applyLogs()
 	}
