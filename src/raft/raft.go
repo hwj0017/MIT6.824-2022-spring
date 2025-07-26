@@ -105,7 +105,8 @@ type Raft struct {
 	// matchIndex treemap.Map
 
 	// 快照状态
-
+	lastIncludedIndex int
+	lastIncludedTerm  int
 	// 自己的一些变量状态
 	state     State // follower/candidate/leader
 	timer     Timer
@@ -144,6 +145,8 @@ func (rf *Raft) persist() {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
+	e.Encode(rf.lastIncludedIndex)
+	e.Encode(rf.lastIncludedTerm)
 	raftstate := w.Bytes()                // 将缓冲区的内容赋值给raftstate
 	rf.persister.SaveRaftState(raftstate) // 在未实现快照之前，第二个参数设置为nil
 }
@@ -168,19 +171,10 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var (
-		currentTerm int
-		votedFor    int
-		log         []LogEntry
-	)
-	if d.Decode(&currentTerm) != nil ||
-		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil {
+	if d.Decode(&rf.currentTerm) != nil ||
+		d.Decode(&rf.votedFor) != nil ||
+		d.Decode(&rf.log) != nil || d.Decode(&rf.lastIncludedIndex) != nil || d.Decode(&rf.lastIncludedTerm) != nil {
 		fmt.Println("decode error!")
-	} else {
-		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
-		rf.log = log
 	}
 }
 
