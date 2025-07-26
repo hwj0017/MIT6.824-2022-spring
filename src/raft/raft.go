@@ -50,7 +50,7 @@ const (
 	Leader
 )
 
-var HeartBeatTimeout int = 100
+var HeartBeatTimeout int = 50
 
 type LogEntry struct {
 	Term    int         // 创建该条目时的任期号
@@ -250,9 +250,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.state = Follower
 		rf.votedFor = -1
 		neadPersisit = true
 	}
+	// 此时已是follower
 	// 比较Term、
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		(args.LastLogTerm > rf.log[len(rf.log)-1].Term || (args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex >= len(rf.log)-1)) {
@@ -261,9 +263,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
 			neadPersisit = true
-			rf.state = Follower
 			rf.timer.reset()
-
 		}
 	}
 	if neadPersisit {
@@ -335,7 +335,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs) bool {
 	// fmt.Println(reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	neadPersisit := false
 	if rf.currentTerm > args.Term || rf.state != Candidate {
 		return false
 	}
@@ -343,7 +342,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs) bool {
 		rf.state = Follower
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
-		neadPersisit = true
+		rf.persist()
 		return false
 	}
 	// 如果选择投票
@@ -360,15 +359,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs) bool {
 			return true
 		}
 	}
-	if server == len(rf.peers)-1 {
-		rf.state = Follower
-		rf.votedFor = -1
-		neadPersisit = true
-	}
-	if neadPersisit {
-		rf.persist()
-	}
-	return true
+	return false
 	// rf.mu.Lock()
 	// defer rf.mu.Unlock()
 	// // 收到过期的RPC回复,不处理
@@ -410,10 +401,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// udate self
 		rf.currentTerm = args.Term
 		rf.state = Follower
-		if rf.votedFor != -1 {
-			rf.votedFor = -1
-			needPersisit = true
-		}
+		rf.votedFor = -1
+		needPersisit = true
 	}
 
 	// log 缺失
@@ -454,15 +443,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// }
 }
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) bool {
+
 	reply := &AppendEntriesReply{}
 	if ok := rf.peers[server].Call("Raft.AppendEntries", args, reply); !ok {
 		// fmt.Printf("%d sendAppendEntries to %d failed, term: %d\n", rf.me, server, rf.currentTerm)
 		return false
 	}
-	// fmt.Println(reply)
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// fmt.Println(reply)
 	// old leader
 	if args.Term != rf.currentTerm || rf.state != Leader {
 		return false
@@ -473,18 +462,18 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) bool {
 		rf.state = Follower
 		rf.votedFor = -1
 		rf.persist()
-		rf.timer.reset()
 		return false
 	}
 	if !reply.Success {
 		lastTermIndex := rf.nextIndex[server] - 1
 		// TODO
-		for lastTermIndex >= 0 && rf.log[lastTermIndex].Term != reply.LastTerm {
+		for lastTermIndex > 0 && rf.log[lastTermIndex].Term != reply.LastTerm {
 			lastTermIndex--
 		}
 		rf.nextIndex[server] = min(lastTermIndex, reply.LastTermIndex) + 1
 		args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.nextIndex[server] - 1,
-			PrevLogTerm: rf.log[rf.nextIndex[server]-1].Term, Entries: rf.log[rf.nextIndex[server]:], LeaderCommit: rf.commitIndex}
+			PrevLogTerm: rf.log[rf.nextIndex[server]-1].Term, Entries: make([]LogEntry, len(rf.log[rf.nextIndex[server]:])), LeaderCommit: rf.commitIndex}
+		copy(args.Entries, rf.log[rf.nextIndex[server]:])
 		go rf.sendAppendEntries(server, args)
 		return true
 	}
@@ -629,7 +618,8 @@ func (rf *Raft) ticker() {
 						continue
 					}
 					args := &AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me, PrevLogIndex: rf.nextIndex[i] - 1,
-						PrevLogTerm: rf.log[rf.nextIndex[i]-1].Term, Entries: rf.log[rf.nextIndex[i]:], LeaderCommit: rf.commitIndex}
+						PrevLogTerm: rf.log[rf.nextIndex[i]-1].Term, Entries: make([]LogEntry, len(rf.log[rf.nextIndex[i]:])), LeaderCommit: rf.commitIndex}
+					copy(args.Entries, rf.log[rf.nextIndex[i]:]) // 显式拷贝
 					go rf.sendAppendEntries(i, args)
 				}
 
