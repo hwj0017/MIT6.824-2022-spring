@@ -193,7 +193,25 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	// 如果下标大于自身commit，说明没被提交，不能执行快照，若自身快照大于index则说明已经执行过快照，也不需要
+	if rf.lastIncludedIndex >= index || index > rf.commitIndex {
+		return
+	}
+
+	// 裁剪日志
+	sLog := make([]LogEntry, 0)
+	sLog = append(sLog, LogEntry{Term: 0})
+	sLog = append(sLog, rf.log[rf.reindex(index)+1:]...)
+
+	// 更新快照下标和快照Term
+	rf.lastIncludedTerm = rf.log[rf.reindex(index)].Term
+	rf.lastIncludedIndex = index
+	rf.log = sLog
+	// TODO
+	rf.persister.SaveStateAndSnapshot(rf.persistData(), snapshot)
 }
 
 // example RequestVote RPC arguments structure.
@@ -226,6 +244,120 @@ type AppendEntriesReply struct {
 	Term       int
 	Success    bool
 	MatchIndex int // 用于返回与Leader.Term的匹配项,方便同步日志
+}
+
+type InstallSnapshotArgs struct {
+	Term              int    // 发送请求的Term
+	LeaderId          int    // 请求方的Id
+	LastIncludedIndex int    // 快照最后applied的日志下标
+	LastIncludedTerm  int    // 快照最后applied时的Term
+	Data              []byte // 快照区块的原始字节流数据
+	// offset				int		// 次传输chunk在快照文件的偏移量，快照文件可能很大，因此需要分chunk，此次不分片
+	// Done 				bool	// true表示是最后一个chunk
+}
+
+type InstallSnapshotReply struct {
+	Term int // 让leader自己更新的
+}
+
+func (rf *Raft) persistData() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	e.Encode(rf.lastIncludedIndex)
+	e.Encode(rf.lastIncludedTerm)
+	return w.Bytes()
+}
+func (rf *Raft) sendInstallSnapShot(server int) {
+	rf.mu.Lock()
+	args := InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: rf.lastIncludedIndex,
+		LastIncludedTerm:  rf.lastIncludedTerm,
+		Data:              rf.persister.ReadSnapshot(),
+	}
+	rf.mu.Unlock()
+	reply := InstallSnapshotReply{}
+	if ok := rf.peers[server].Call("Raft.InstallSnapShot", args, reply); !ok {
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.state != Leader || rf.currentTerm != args.Term {
+		return
+	}
+	if reply.Term > rf.currentTerm {
+		rf.currentTerm = reply.Term
+		rf.state = Follower
+		rf.votedFor = -1
+		rf.persist()
+		return
+	}
+	// TODO
+	rf.matchIndex[server] = args.LastIncludedIndex
+	rf.nextIndex[server] = rf.matchIndex[server] + 1
+}
+
+func (rf *Raft) reindex(index int) int {
+	return index - rf.lastIncludedIndex
+}
+
+// follower更新leader的快照
+func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	if rf.currentTerm > args.Term {
+		reply.Term = rf.currentTerm
+		rf.mu.Unlock()
+		return
+	}
+	reply.Term = args.Term
+	rf.timer.reset()
+	needPersist := false
+	if rf.currentTerm < args.Term {
+		rf.currentTerm = args.Term
+		rf.state = Follower
+		rf.votedFor = -1
+		needPersist = true
+	}
+	// 已经覆盖了这个快照了，不用再写入快照
+	if rf.lastIncludedIndex >= args.LastIncludedIndex {
+		if needPersist {
+			rf.persist()
+		}
+		rf.mu.Unlock()
+		return
+	}
+	needPersist = true
+	// 将快照后的log切割，快照前的提交
+	index := args.LastIncludedIndex
+	tempLog := make([]LogEntry, len(rf.log)-(args.LastIncludedIndex-rf.lastIncludedIndex))
+	tempLog = append(tempLog, LogEntry{Term: 0})
+	tempLog = append(tempLog, rf.log[rf.reindex(index)+1:]...)
+
+	rf.log = tempLog
+	rf.lastIncludedIndex = index
+	rf.lastIncludedTerm = args.LastIncludedTerm
+
+	rf.commitIndex = max(rf.commitIndex, index)
+	if index > rf.lastApplied {
+		// not to applyLogs
+		rf.lastApplied = index
+	}
+	// TODO:已经写入state？
+	rf.persister.SaveStateAndSnapshot(rf.persistData(), args.Data)
+	applyMsg := ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      args.Data,
+		SnapshotTerm:  rf.lastIncludedTerm,
+		SnapshotIndex: rf.lastIncludedIndex,
+	}
+	rf.mu.Unlock()
+	rf.applyCh <- applyMsg
 }
 
 // example RequestVote RPC handler.
@@ -378,7 +510,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs) bool {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	needPersisit := false
+	needPersist := false
 	reply.Term = max(args.Term, rf.currentTerm)
 	reply.Success = true
 	reply.MatchIndex = 0
@@ -394,7 +526,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.currentTerm = args.Term
 		rf.state = Follower
 		rf.votedFor = -1
-		needPersisit = true
+		needPersist = true
 	}
 
 	// log 缺失
@@ -410,11 +542,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if rf.commitIndex > rf.lastApplied {
 			go rf.applyLogs()
 		}
-		needPersisit = true
+		needPersist = true
 		reply.Success = true
 		reply.MatchIndex = len(rf.log) - 1
 	}
-	if needPersisit {
+	if needPersist {
 		rf.persist()
 	}
 	// rf.mu.Lock()
