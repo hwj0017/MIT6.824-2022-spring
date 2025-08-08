@@ -3,7 +3,7 @@ package kvraft
 import (
 	"crypto/rand"
 	"math/big"
-	"sync"
+	// "sync"
 
 	"6.824/labrpc"
 )
@@ -11,10 +11,10 @@ import (
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	lastLeader           int        //上一次RPC发现的主机id
-	mu                   sync.Mutex //锁
-	clientId             int64      //client唯一id
-	lastAppliedCommandId int64      //Command的唯一id
+	lastLeader int //上一次RPC发现的主机id
+	// mu                   sync.Mutex //锁
+	clientId      int64 //client唯一id
+	nextRequestId int64 //Command的唯一id
 }
 
 func nrand() int64 {
@@ -30,7 +30,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	// You'll have to add code here.
 	ck.lastLeader = 0
 	ck.clientId = nrand()
-	ck.lastAppliedCommandId = 0
+	ck.nextRequestId = 0
 	return ck
 }
 
@@ -46,12 +46,12 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	commandId := ck.lastAppliedCommandId + 1
 	args := GetArgs{
 		Key:       key,
 		ClientId:  ck.clientId,
-		RequestId: commandId,
+		RequestId: ck.nextRequestId,
 	}
+	ck.nextRequestId++
 	DPrintf("client[%d]: 开始发送Get RPC;args=[%v]\n", ck.clientId, args)
 	//第一个发送的目标server是上一次RPC发现的leader
 	serverId := ck.lastLeader
@@ -68,7 +68,6 @@ func (ck *Clerk) Get(key string) string {
 		DPrintf("client[%d]: 发送Get RPC;args=[%v]到server[%d]成功,Reply=[%v]\n", ck.clientId, args, serverId, reply)
 		//若发送成功,则更新最近发现的leader
 		ck.lastLeader = serverId
-		ck.lastAppliedCommandId = commandId
 		if reply.Err == ErrNoKey {
 			return ""
 		}
@@ -86,16 +85,16 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	commandId := ck.lastAppliedCommandId + 1
 	args := PutAppendArgs{
 		Key:       key,
 		Value:     value,
 		Op:        op,
 		ClientId:  ck.clientId,
-		RequestId: commandId,
+		RequestId: ck.nextRequestId,
 	}
+	ck.nextRequestId++
 	//第一个发送的目标server是上一次RPC发现的leader
-	DPrintf("client[%d]: 开始发送PutAppend RPC;args=[%v]\n", ck.clientId, args)
+	// DPrintf("client[%d]: 开始发送PutAppend RPC;args=[%v]\n", ck.clientId, args)
 	serverId := ck.lastLeader
 	serverNum := len(ck.servers)
 	for ; ; serverId = (serverId + 1) % serverNum {
@@ -110,7 +109,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		DPrintf("client[%d]: 发送PutAppend RPC;args=[%v]到server[%d]成功,Reply=[%v]\n", ck.clientId, args, serverId, reply)
 		//若发送成功,则更新最近发现的leader以及commandId
 		ck.lastLeader = serverId
-		ck.lastAppliedCommandId = commandId
 		return
 	}
 }

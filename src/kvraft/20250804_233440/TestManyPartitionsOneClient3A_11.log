@@ -1,0 +1,12 @@
+Test: partitions, one client (3A) ...
+info: wrote history visualization to /tmp/1766037998.html
+--- FAIL: TestManyPartitionsOneClient3A (22.67s)
+    test_test.go:293: get wrong value, key 0, wanted:
+        x 0 0 yx 0 1 yx 0 2 yx 0 3 yx 0 4 yx 0 5 yx 0 6 yx 0 7 yx 0 8 yx 0 9 yx 0 10 yx 0 11 yx 0 12 yx 0 13 yx 0 14 yx 0 15 yx 0 16 yx 0 17 yx 0 18 yx 0 19 yx 0 20 yx 0 21 yx 0 22 yx 0 23 yx 0 24 yx 0 25 yx 0 26 yx 0 27 yx 0 28 yx 0 29 yx 0 30 yx 0 31 yx 0 32 yx 0 33 yx 0 34 yx 0 35 yx 0 36 yx 0 37 yx 0 38 yx 0 39 yx 0 40 yx 0 41 yx 0 42 yx 0 43 yx 0 44 yx 0 45 yx 0 46 yx 0 47 yx 0 48 yx 0 49 yx 0 50 yx 0 51 yx 0 52 y
+        , got
+        
+    test_test.go:126: failure
+    test_test.go:382: history is not linearizable
+FAIL
+exit status 1
+FAIL	6.824/kvraft	22.672s

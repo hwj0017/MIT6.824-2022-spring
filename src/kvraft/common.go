@@ -1,13 +1,13 @@
 package kvraft
 
-const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongLeader = "ErrWrongLeader"
-	ErrTimeout     = "ErrTimeout"
-)
+type Err int
 
-type Err string
+const (
+	OK Err = iota
+	ErrNoKey
+	ErrWrongLeader
+	ErrTimeout
+)
 
 // Put or Append
 type PutAppendArgs struct {

@@ -209,6 +209,7 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 // maxraftstate is a positive number, the size of the state for Raft (i.e., log
 // size) shouldn't exceed 8*maxraftstate. If maxraftstate is negative,
 // snapshots shouldn't be used.
+
 func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliable bool, crash bool, partitions bool, maxraftstate int, randomkeys bool) {
 
 	title := "Test: "
@@ -591,12 +592,10 @@ func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 	GenericTest(t, "3A", 15, 7, true, true, true, -1, true)
 }
 
-//
 // if one server falls behind, then rejoins, does it
 // recover by using the InstallSnapshot RPC?
 // also checks that majority discards committed log entries
 // even if minority doesn't respond.
-//
 func TestSnapshotRPC3B(t *testing.T) {
 	const nservers = 3
 	maxraftstate := 1000

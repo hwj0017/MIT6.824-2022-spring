@@ -1,0 +1,3 @@
+# 6.824/kvraft [6.824/kvraft.test]
+./server.go:170:32: syntax error: unexpected ), expected type
+FAIL	6.824/kvraft [build failed]
